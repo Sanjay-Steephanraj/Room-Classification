@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+
+<html lang="en" class="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Room Classification Dashboard</title>
+
+    ```
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#197fe6",
+                        "background-light": "#f6f7f8"
+                    }
+                }
+            }
+        }
+    </script>
+    ```
+
+</head>
+
+<body class="bg-background-light min-h-screen flex font-sans">
+
+    ```
+    <!-- Sidebar -->
+    <aside class="w-80 bg-white border-r p-6 flex flex-col justify-between shadow-lg">
+
+        <div>
+            <h1 class="text-xl font-bold mb-6">AI Categorizer</h1>
+
+            <label class="block mb-2 text-sm font-semibold">Folder Path OR Website URL</label>
+            <input id="folderInput" type="text" placeholder="C:/images/test OR https://example.com/gallery"
+                class="w-full p-3 border rounded-lg text-sm mb-4 focus:ring-2 focus:ring-primary focus:outline-none">
+
+            <label class="block mb-2 text-sm font-semibold">Upload CSV (Image URLs)</label>
+            <input id="csvInput" type="file" accept=".csv" class="w-full mb-4 text-sm">
+
+            <button id="processBtn"
+                class="w-full bg-primary text-white py-3 rounded-lg font-semibold hover:bg-blue-600 transition duration-200">
+                Process & Categorize
+            </button>
+        </div>
+
+        <div class="text-xs text-gray-400 mt-10">
+            ConvNeXt Room Classification
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-8 overflow-y-auto">
+
+        <h2 class="text-2xl font-bold mb-6">Analysis Results</h2>
+
+        <div id="statsSection" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"></div>
+        <div id="resultsContainer" class="space-y-12"></div>
+
+    </main>
+    ```
+
+    <script>
+
+        document.getElementById("processBtn").addEventListener("click", async function () {
+
+            const folderPath = document.getElementById("folderInput").value.trim();
+            const csvFile = document.getElementById("csvInput").files[0];
+
+            const container = document.getElementById("resultsContainer");
+            const statsSection = document.getElementById("statsSection");
+
+            container.innerHTML = "<p class='text-lg text-gray-500'>Processing images...</p>";
+            statsSection.innerHTML = "";
+
+            let response;
+
+            try {
+
+                if (csvFile) {
+                    const formData = new FormData();
+                    formData.append("file", csvFile);
+
+                    response = await fetch("/predict_folder", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                } else if (folderPath) {
+
+                    response = await fetch("/predict_folder", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ folder_path: folderPath })
+                    });
+
+                } else {
+                    alert("Provide folder path, URL, or CSV");
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.error) {
+                    container.innerHTML = `<p class="text-red-500 text-lg">${data.error}</p>`;
+                    return;
+                }
+
+                if (data.length === 0) {
+                    container.innerHTML = "<p class='text-gray-500'>No images found.</p>";
+                    return;
+                }
+
+                renderResults(data);
+
+            } catch (err) {
+                container.innerHTML = "<p class='text-red-500 text-lg'>Server connection failed.</p>";
+            }
+        });
+
+
+        function renderResults(data) {
+
+            const container = document.getElementById("resultsContainer");
+            const statsSection = document.getElementById("statsSection");
+
+            container.innerHTML = "";
+            statsSection.innerHTML = "";
+
+            // GROUP
+            const grouped = {};
+            data.forEach(item => {
+
+                // NORMALIZE "Other", "others", etc → "Others"
+                let category = item.class.trim().toLowerCase();
+                if (category === "other" || category === "others")
+                    category = "Others";
+                else
+                    category = item.class;
+
+                if (!grouped[category]) grouped[category] = [];
+                grouped[category].push(item);
+            });
+
+            // SPLIT NORMAL & OTHERS
+            let normalCategories = [];
+            let othersExists = false;
+
+            Object.keys(grouped).forEach(cat => {
+                if (cat === "Others") othersExists = true;
+                else normalCategories.push(cat);
+            });
+
+            // SORT NORMAL ONLY
+            normalCategories.sort((a, b) => a.localeCompare(b));
+
+            // FINAL ORDER
+            const categories = othersExists ? [...normalCategories, "Others"] : normalCategories;
+
+            // STATS
+            categories.forEach(category => {
+
+                const items = grouped[category];
+                const avgConfidence =
+                    (items.reduce((sum, i) => sum + i.confidence, 0) / items.length).toFixed(1);
+
+                statsSection.innerHTML += `
+        <div class="bg-white shadow rounded-xl p-4 text-center">
+            <p class="text-2xl font-bold text-primary">${items.length}</p>
+            <p class="text-xs uppercase font-semibold text-gray-500 mt-1">${category}</p>
+            <p class="text-xs text-gray-400 mt-1">Avg ${avgConfidence}%</p>
+        </div>
+        `;
+            });
+
+            // IMAGES
+            categories.forEach(category => {
+
+                const section = document.createElement("div");
+
+                section.innerHTML = `
+        <div>
+            <h3 class="text-lg font-bold mb-4">
+                ${category}
+                <span class="text-sm text-primary font-semibold">
+                    (${grouped[category].length})
+                </span>
+            </h3>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                ${grouped[category].map(img => {
+
+                    let badgeColor = "bg-green-500 text-white";
+                    if (img.confidence < 50) badgeColor = "bg-red-500 text-white";
+                    else if (img.confidence < 70) badgeColor = "bg-yellow-400 text-black";
+
+                    let imageSrc = img.is_url
+                        ? img.image
+                        : `/get_image?folder=${encodeURIComponent(img.folder)}&filename=${img.image}`;
+
+                    return `
+                        <div class="relative rounded-xl overflow-hidden shadow hover:shadow-xl transition">
+                            <img src="${imageSrc}" class="w-full h-40 object-cover">
+
+                            <div class="absolute bottom-2 right-2 ${badgeColor} px-2 py-1 rounded text-xs font-bold shadow">
+                                ${img.class} ${img.confidence}%
+                            </div>
+                        </div>
+                    `;
+                }).join("")}
+            </div>
+        </div>
+        `;
+
+                container.appendChild(section);
+            });
+        }
+
+    </script>
+
+</body>
+
+</html>
